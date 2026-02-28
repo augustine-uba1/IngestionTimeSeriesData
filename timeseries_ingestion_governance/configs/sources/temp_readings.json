@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "applied_schema": "configs/sources/schemas/reading_schema.json",
+  "name": "temp_readings",
+  "description": "Temperature readings with mixed units (C/F).",
+  "source_system": "intelliam_iot",
+  "domain": "iot",
+  "file_format": "csv",
+  "landing_path": "abfss://<container>@<sa>.dfs.core.windows.net/iot/landing/temp_readings/*.csv",
+  "raw_table": "iot.raw.temp_readings_raw",
+  "bronze_table": "iot.bronze.temp_readings",
+  "primary_key": ["UID"],
+  "natural_key": ["sensor_id", "timestamp"],
+  "csv_options": {
+    "header": true,
+    "delimiter": ",",
+    "encoding": "utf-8",
+    "multiLine": false
+  },
+  "parsing": {
+    "timestamp_format": "dd/MM/yyyy HH:mm",
+    "timezone": "UTC"
+  },
+  "schema_evolution": {
+    "autoloader_schema_evolution_mode": "addNewColumns",
+    "rescued_data_column": "_rescued_data",
+    "on_unexpected_columns": "capture"
+  },
+  "governance": {
+    "table_tags": {
+      "layer": "raw/bronze",
+      "entity": "reading",
+      "measurement": "temperature",
+      "contains_pii": "no",
+      "sensitivity": "internal",
+      "retention": "365d"
+    }
+  },
+  "columns": [
+    { "name": "UID", "type": "string", "nullable": false, "tags": { "classification": "metadata", "role": "record_id" } },
+    { "name": "sensor_id", "type": "string", "nullable": false, "tags": { "classification": "metadata", "role": "sensor_id" } },
+    { "name": "timestamp", "type": "timestamp", "source_type": "string", "nullable": false, "parse": { "from_format": "dd/MM/yyyy HH:mm" }, "tags": { "classification": "telemetry", "role": "event_time" } },
+    {
+      "name": "degrees",
+      "type": "double",
+      "nullable": false,
+      "tags": { "classification": "telemetry", "role": "temperature_value" },
+      "quality": [
+        { "rule": "between", "expr": { "min": -50.0, "max": 300.0 } }
+      ]
+    },
+    {
+      "name": "unit",
+      "type": "string",
+      "nullable": false,
+      "tags": { "classification": "telemetry", "role": "temperature_unit" },
+      "quality": [
+        { "rule": "in", "expr": ["C", "F"] }
+      ]
+    }
+  ],
+  "standardization": [
+    {
+      "name": "degrees_c",
+      "type": "double",
+      "expression": "CASE WHEN unit = 'C' THEN degrees WHEN unit = 'F' THEN (degrees - 32) * 5/9 ELSE NULL END",
+      "tags": { "classification": "derived", "role": "temperature_canonical", "unit": "C" }
+    }
+  ]
+}

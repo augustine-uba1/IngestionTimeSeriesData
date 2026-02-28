@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "applied_schema": "configs/sources/schemas/reading_schema.json",
+  "name": "vibration_readings",
+  "description": "Vibration readings (acceleration, velocity, peak-to-peak).",
+  "source_system": "intelliam_iot",
+  "domain": "iot",
+  "file_format": "csv",
+  "landing_path": "abfss://<container>@<sa>.dfs.core.windows.net/iot/landing/vibration_readings/*.csv",
+  "raw_table": "iot.raw.vibration_readings_raw",
+  "bronze_table": "iot.bronze.vibration_readings",
+  "primary_key": ["UID"],
+  "natural_key": ["sensor_id", "timestamp"],
+  "csv_options": {
+    "header": true,
+    "delimiter": ",",
+    "encoding": "utf-8",
+    "multiLine": false
+  },
+  "parsing": {
+    "timestamp_format": "dd/MM/yyyy HH:mm",
+    "timezone": "UTC"
+  },
+  "schema_evolution": {
+    "autoloader_schema_evolution_mode": "addNewColumns",
+    "rescued_data_column": "_rescued_data",
+    "on_unexpected_columns": "capture"
+  },
+  "governance": {
+    "table_tags": {
+      "layer": "raw/bronze",
+      "entity": "reading",
+      "measurement": "vibration",
+      "contains_pii": "no",
+      "sensitivity": "internal",
+      "retention": "365d"
+    }
+  },
+  
+  "columns": [
+    { "name": "UID", "type": "string", "nullable": false, "tags": { "classification": "metadata", "role": "record_id" } },
+    { "name": "sensor_id", "type": "string", "nullable": false, "tags": { "classification": "metadata", "role": "sensor_id" } },
+    { "name": "timestamp", "type": "timestamp", "source_type": "string", "nullable": false, "parse": { "from_format": "dd/MM/yyyy HH:mm" }, "tags": { "classification": "telemetry", "role": "event_time" } },
+    {
+      "name": "acceleration",
+      "type": "double",
+      "nullable": false,
+      "tags": { "classification": "telemetry", "role": "vibration_acceleration" },
+      "quality": [
+        { "rule": "between", "expr": { "min": 0.0, "max": 100.0 } }
+      ]
+    },
+    {
+      "name": "velocity",
+      "type": "double",
+      "nullable": false,
+      "tags": { "classification": "telemetry", "role": "vibration_velocity" },
+      "quality": [
+        { "rule": "between", "expr": { "min": 0.0, "max": 100.0 } }
+      ]
+    },
+    {
+      "name": "peak_to_peak",
+      "type": "double",
+      "nullable": false,
+      "tags": { "classification": "telemetry", "role": "vibration_peak_to_peak" },
+      "quality": [
+        { "rule": "between", "expr": { "min": 0.0, "max": 1000.0 } }
+      ]
+    }
+  ]
+}

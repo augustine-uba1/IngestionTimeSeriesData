@@ -1,0 +1,23 @@
+resources:
+  pipelines:
+    bronze_pipeline:
+      name: intelliam-bronze-${bundle.target}
+      serverless: true
+      development: true
+      continuous: false
+      channel: CURRENT
+      edition: ADVANCED
+      photon: true
+
+      catalog: ${var.catalog_name}
+      target: ${var.bronze_schema}
+
+      libraries:
+        - file:
+            path: ../src/pipelines/bronze_pipeline.py
+
+      configuration:
+        iot.catalog: ${var.catalog_name}
+        iot.raw_schema: ${var.raw_schema}
+        iot.bronze_schema: ${var.bronze_schema}
+        iot.config_dir: ${workspace.file_path}/configs/sources
