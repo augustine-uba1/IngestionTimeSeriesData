@@ -18,6 +18,12 @@ variables:
   bronze_schema:
     default: iot_bronze
 
+  silver_schema:
+    default: iot_silver
+
+  gold_schema:
+    default: iot_gold
+
   # External Location: raw_files
   landing_base:
     default: abfss://unitymetastore@timeseriesdataaub001.dfs.core.windows.net/iot

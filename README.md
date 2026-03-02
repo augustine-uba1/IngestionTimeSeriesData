@@ -80,11 +80,11 @@ The Raw layer is ingested using Databricks Auto Loader and is intentionally tole
 
 **Why this matters:**
 
-IoT telemetry formats can drift over time. The Raw layer ensures we never lose information, even if the source changes unexpectedly.
+IoT telemetry formats can drift over time. The Raw layer ensures I never lose information, even if the source changes unexpectedly.
 
 ### Bronze Layer (iot_bronze.*) — "Governed Contract + Quarantine"
 
-The Bronze layer is implemented using Delta Live Tables (DLT). Bronze is where we introduce "production-grade" standardisation and data quality controls, while still remaining close to source.
+The Bronze layer is implemented using Delta Live Tables (DLT). Bronze is where I introduce "production-grade" standardisation and data quality controls, while still remaining close to source.
 
 **Behaviour:**
 
@@ -193,6 +193,78 @@ The images below show a complete successful Silver pipeline run (job summary, pi
 
 ![Silver pipeline lineage/metrics](img/pipeline_run6.png)
 
+### Gold Layer Build (Correlated Analytics + Findings)
+
+The Gold layer (`main.iot_gold`) is the business-facing output of the pipeline. It takes the conformed Silver model (`iot_silver.dim_component` + `iot_silver.fact_measurement_long`) and produces:
+
+* a time-aligned correlated dataset (speed, temperature, vibration aligned by component + time bucket)
+* anomaly flags derived from baseline behaviour per component
+* maintenance recommendations that can be consumed directly by stakeholders
+
+Gold is built using a dedicated DLT/Lakeflow pipeline.
+
+**Gold Tables and Meanings**
+
+1. `iot_gold.component_health_1m`
+   * What it is: The core correlated dataset, aggregated to 1-minute buckets per component.
+   * Why it exists: Correlation/anomaly work requires aligned time series. Different sensors produce readings at different rates; Gold aligns them into a common time grain.
+   * Grain: `(component_key, time_bucket)`
+   * Outputs (key columns):
+     * `time_bucket` (minute start timestamp)
+     * `component_key`, `Path`, `uns_machine`, `uns_component`, etc.
+     * Correlated measures: `avg_speed_hz`, `avg_temp_c`, `avg_vibration_velocity`, `avg_vibration_acceleration`, `avg_vibration_peak_to_peak`, `power_on_ratio` (0–1 within the minute; optional operational context)
+   * Expected usage: plot speed vs temperature vs vibration over time per component; compute correlations per component; feed anomaly detection logic.
+
+2. `iot_gold.component_stats`
+   * What it is: A helper table that computes baseline statistics per component from `component_health_1m`.
+   * Why it exists: Anomaly detection requires “normal behaviour” per component.
+   * Grain: `(component_key)`
+   * Outputs (examples): `mean_temp_c`, `std_temp_c`, `mean_vibration_velocity`, `std_vibration_velocity` (and similar for speed).
+   * Expected usage: baseline for z-score style detection; simple component benchmarking.
+
+3. `iot_gold.component_anomalies`
+   * What it is: A filtered subset of `component_health_1m` where a component shows unusual behaviour vs its own baseline.
+   * How it works (current approach): z-score rule: flag if temperature OR vibration velocity exceeds a configurable threshold relative to that component’s mean. The default conservative threshold is 3 standard deviations (3σ).
+   * Grain: `(component_key, time_bucket)` for anomalous buckets only.
+   * Outputs (examples): the correlated measures (from `component_health_1m`), `z_temp`, `z_vibration_velocity`, `anomaly_flag` (true), `anomaly_reason` (array), e.g.: `TEMP_SPIKE_VS_BASELINE`, `VIBRATION_SPIKE_VS_BASELINE`.
+   * Expected usage: “Where and when did behaviour deviate?”; evidence for maintenance actions.
+
+   **Anomaly Threshold Tuning Note**
+
+   The Gold anomaly detection uses a simple per-component baseline approach (z-score) to flag unusual behaviour in temperature and vibration velocity relative to each component’s historical mean and standard deviation.
+
+   In the initial implementation, a conservative threshold was used (commonly z > 3σ) to minimise false positives. On the provided dataset/time window, this resulted in no anomalies detected, which is a valid outcome (i.e., the data appears stable under that strict definition).
+
+   For the purpose of this interview practical, I also tested less conservative thresholds to demonstrate the end-to-end workflow and business outputs:
+
+   * At z > 2σ, the anomaly table still returned 0 rows for this dataset.
+   * I then reduced the vibration threshold to z > 1σ (while keeping temperature at the stricter threshold) to increase sensitivity and validate the downstream pipeline behaviour.
+
+   After tuning:
+
+   * `iot_gold.component_anomalies` produced 597 anomalous time buckets
+   * `iot_gold.maintenance_recommendations` produced 2 component-level recommendations (one per component in the dataset)
+
+   (see example anomaly table below when z > 1 for vibration)
+
+   ![Anomaly example](img/anomaly.png)
+
+   * The pipeline does not manufacture findings at conservative thresholds.
+   * The anomaly outputs are configurable and can be tuned in production based on domain tolerance for false positives vs missed faults, and ideally calibrated using historical failure/maintenance labels.
+
+4. `iot_gold.maintenance_recommendations`
+   * What it is: A business-friendly summary table per component that aggregates anomalies and produces a recommended action.
+   * Why it exists: Stakeholders typically want an actionable view, not raw anomaly rows.
+   * Grain: `(component_key)`
+   * Outputs (examples): `anomaly_count`, `latest_anomaly_time`, `anomaly_reasons` (distinct reasons seen), `recommendation` (human-readable).
+   * Expected usage: operational reporting (“which components should I inspect next?”); maintenance planning / prioritisation.
+
+The images below demonstrate a successful Gold pipeline execution including job summary and final output validation.
+
+![Gold pipeline job summary](img/pipeline_run7.png)
+
+![Gold pipeline output view](img/pipeline_run8.png)
+
 ## Pipeline Runs & Monitoring
 
 ### Job Pipeline Summary
@@ -226,7 +298,7 @@ Each Bronze table has DLT expectations to monitor key quality checks such as req
 
 **Quarantine Handling (Bad Data Isolation)**
 
-For each readings dataset we generate two outputs:
+For each readings dataset I generate two outputs:
 
 * `<dataset>`: valid records only
 * `<dataset>_quarantine`: invalid records isolated for inspection
@@ -258,6 +330,62 @@ DLT automatically captures lineage between the raw Delta sources (e.g., `iot_raw
 
 After DLT materialises the Bronze tables, a separate job task applies Unity Catalog table and column tags from the JSON configs. This keeps governance concerns (classification, sensitivity, domain, measurement type, etc.) consistent across raw and bronze without complicating the pipeline runtime.
 
+## Executive Summary of Insights
+
+Using the Gold analytics layer (`iot_gold.component_health_1m` and `iot_gold.component_anomalies`), a correlated, analysis-ready dataset was produced at 1-minute intervals per component.  This facilitated cross-signal comparison of speed (Hz), temperature (°C) and vibration (velocity/acceleration/peak-to-peak) for the two Bottle Filler heads.
+
+### 1) Correlations and Behaviours Observed
+
+I computed Pearson correlation coefficients across speed, temperature, and vibration signals as part of the Gold analysis. Pearson’s product-moment correlation measures the strength and direction of a linear relationship between two variables, ranging from −1 (perfect negative linear correlation) through 0 (no linear correlation) to +1 (perfect positive linear correlation). Correlations are computed over paired observations where both variables are present (non-null).
+
+This definition is described authoritatively by NIST’s Handbook of Statistical Methods (Pearson’s product-moment correlation).
+
+**References:**
+
+* Databricks SQL — `corr()` (returns Pearson correlation coefficient): https://docs.databricks.com/aws/en/sql/language-manual/functions/corr
+* Apache Spark (PySpark) — `pyspark.sql.functions.corr` (Pearson correlation coefficient): https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.corr.html
+* Pearson correlation coefficient (definition and interpretation): https://en.wikipedia.org/wiki/Pearson_correlation_coefficient
+* NIST overview of correlation / Pearson product-moment correlation: https://www.itl.nist.gov/div898/handbook/eda/section3/eda35a.htm
+
+In Databricks/Spark I used the built-in `corr` function to compute these coefficients. Databricks SQL documentation states: “Returns Pearson coefficient of correlation between two expressions.” Similarly, PySpark’s `DataFrame.stat.corr` method is documented as returning the Pearson Correlation Coefficient, and the Spark SQL built-in functions list includes `corr(expr1, expr2)` with that same description.
+
+* Speed remained broadly stable around ~50 Hz for both heads (typical values ~49.6–50.0 Hz).
+* Vibration velocity exhibited the most variation. The anomalies output contains numerous 1‑minute buckets with elevated vibration compared to each component’s historical average.
+* Temperature is often missing in a given minute bucket (null `avg_temp_c`), reflecting sensors reporting at different frequencies or gaps. When temperature is absent, derived metrics such as `z_temp` are also null.
+
+### 2) Anomalies Detected
+
+A per-component z-score baseline approach flagged unusual readings. For demonstration, sensitivity was tuned as follows:
+
+* Temperature spike: z > 3 (conservative)
+* Vibration velocity spike: z > 1 (more sensitive)
+
+With these criteria:
+
+* `iot_gold.component_anomalies` produced **597 anomalous 1‑minute buckets** across the two components.
+* Each anomaly row includes baseline stats (`mean_*`, `std_*`) and z-scores.
+* The majority of anomalies were driven by vibration velocity spikes (`VIBRATION_SPIKE_VS_BASELINE`).
+
+Example anomaly (Filler_Head_02):
+
+* speed ≈ 49.8 Hz
+* vibration velocity ≈ 3.69 vs baseline mean ≈ 2.94 (z ≈ 1.42)
+* anomaly reason: VIBRATION_SPIKE_VS_BASELINE
+
+### 3) Maintenance Recommendations
+
+The `iot_gold.maintenance_recommendations` table aggregates anomalies per component into actionable advice.
+
+* Both components yielded recommendations:
+  * **Filler_Head_02**: 302 anomalous buckets (latest 2026‑02‑03 11:59 UTC)
+  * **Filler_Head_01**: 295 anomalous buckets (latest 2026‑02‑03 11:59 UTC)
+* Suggested actions: inspect bearings and mountings/alignment, as repeated vibration deviations often indicate wear, looseness, or imbalance.
+* Prioritisation: inspect Filler_Head_02 first due to slightly higher anomaly count.
+* Context note: `power_on_ratio` is null in many buckets since power telemetry reports at a different frequency; in production this would be forward-filled to better link anomalies to machine state.
+
+### Notes on Data Completeness
+
+Null values for `avg_temp_c` and `power_on_ratio` are expected and reflect multi-sensor timing differences. The model aligns available measures per minute while preserving missingness, rather than inventing values.
 
 
 ## References

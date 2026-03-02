@@ -43,9 +43,16 @@ resources:
             pipeline_id: ${resources.pipelines.silver_pipeline.id}
             full_refresh: true
 
-        - task_key: apply_uc_tags
+        - task_key: run_gold_pipeline
           depends_on:
             - task_key: run_silver_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.gold_pipeline.id}
+            full_refresh: true
+
+        - task_key: apply_uc_tags
+          depends_on:
+            - task_key: run_gold_pipeline
           notebook_task:
             notebook_path: ../src/notebooks/90_apply_uc_tags.ipynb
             base_parameters:
