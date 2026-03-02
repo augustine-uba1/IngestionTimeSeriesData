@@ -1,0 +1,62 @@
+resources:
+  jobs:
+    daily_iot_ingest:
+      name: intelliam-daily-iot-${bundle.target}
+
+      parameters:
+        - name: ingest_date
+          default: "20260227"   # you can override at run time
+
+      tasks:
+        - task_key: setup_uc
+          notebook_task:
+            notebook_path: ../src/notebooks/00_setup_uc.ipynb
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              raw_schema: ${var.raw_schema}
+              bronze_schema: ${var.bronze_schema}
+
+        - task_key: ingest_raw
+          depends_on:
+            - task_key: setup_uc
+          notebook_task:
+            notebook_path: ../src/notebooks/10_ingest_raw_autoloader.ipynb
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              raw_schema: ${var.raw_schema}
+              landing_base: ${var.landing_base}
+              ingest_date: "{{job.parameters.ingest_date}}"
+              autoloader_state_base: ${var.autoloader_state_base}
+              config_dir: ${workspace.file_path}/configs/sources
+
+        - task_key: run_bronze_pipeline
+          depends_on:
+            - task_key: ingest_raw
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.bronze_pipeline.id}
+            full_refresh: false
+
+        - task_key: run_silver_pipeline
+          depends_on:
+            - task_key: run_bronze_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_pipeline.id}
+            full_refresh: true
+
+        - task_key: run_gold_pipeline
+          depends_on:
+            - task_key: run_silver_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.gold_pipeline.id}
+            full_refresh: true
+
+        - task_key: apply_uc_tags
+          depends_on:
+            - task_key: run_gold_pipeline
+          notebook_task:
+            notebook_path: ../src/notebooks/90_apply_uc_tags.ipynb
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              raw_schema: ${var.raw_schema}
+              bronze_schema: ${var.bronze_schema}
+              config_dir: ${workspace.file_path}/configs/sources

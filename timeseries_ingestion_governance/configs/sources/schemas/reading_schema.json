@@ -1,0 +1,55 @@
+{
+  "schema_name": "reading_schema",
+  "version": 1,
+  "description": "Reusable schema for time-series sensor readings and common component metadata.",
+  "fields": [
+    { "name": "UID", "type": "string", "nullable": false, "role": "record_id" },
+    { "name": "sensor_id", "type": "string", "nullable": false, "role": "sensor_id" },
+    { "name": "timestamp", "type": "timestamp", "nullable": false, "role": "event_time", "parse": { "from_format": "dd/MM/yyyy HH:mm", "timezone": "UTC" } },
+    {
+      "name": "measurements",
+      "type": "object",
+      "nullable": true,
+      "description": "Map of measurement names to values. Concrete source configs may map specific measurement fields into this object.",
+      "properties": {
+        "acceleration": { "type": "double", "nullable": true },
+        "velocity": { "type": "double", "nullable": true },
+        "peak_to_peak": { "type": "double", "nullable": true },
+        "hertz": { "type": "double", "nullable": true },
+        "degrees": { "type": "double", "nullable": true },
+        "unit": { "type": "string", "nullable": true },
+        "status": { "type": "string", "nullable": true }
+      }
+    },
+    { "name": "Path", "type": "string", "nullable": true, "role": "uns_path" },
+    { "name": "installation_date", "type": "date", "nullable": true }
+  ],
+  "notes": "This schema is intentionally flexible: sources can reference it and rely on the built-in mappings below.",
+  "mappings": {
+    "by_measurement_type": {
+      "vibration": {
+        "measurement_fields": ["acceleration", "velocity", "peak_to_peak"],
+        "map_to_measurements_object": true
+      },
+      "speed": {
+        "measurement_fields": ["hertz"],
+        "map_to_measurements_object": true
+      },
+      "temperature": {
+        "measurement_fields": ["degrees", "unit"],
+        "map_to_measurements_object": true,
+        "standardization": {
+          "degrees_c": "CASE WHEN unit = 'C' THEN degrees WHEN unit = 'F' THEN (degrees - 32) * 5/9 ELSE NULL END"
+        }
+      },
+      "power": {
+        "measurement_fields": ["status"],
+        "map_to_measurements_object": true
+      }
+    },
+    "components": {
+      "map_fields": ["Path", "installation_date", "sensor_id", "name"],
+      "notes": "Used for component metadata sources; these map directly to top-level fields on the canonical record."
+    }
+  }
+}

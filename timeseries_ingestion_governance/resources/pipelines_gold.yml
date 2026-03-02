@@ -1,0 +1,21 @@
+resources:
+  pipelines:
+    gold_pipeline:
+      name: intelliam-gold-${bundle.target}
+      serverless: true
+      edition: ADVANCED
+      development: true
+      continuous: false
+      channel: CURRENT
+      photon: true
+
+      catalog: ${var.catalog_name}
+      target: ${var.gold_schema}
+
+      libraries:
+        - file:
+            path: ../src/pipelines/gold_pipeline.py
+
+      configuration:
+        iot.catalog: ${var.catalog_name}
+        iot.silver_schema: ${var.silver_schema}

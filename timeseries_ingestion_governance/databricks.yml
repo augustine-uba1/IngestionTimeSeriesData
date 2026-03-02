@@ -1,0 +1,54 @@
+# This is a Databricks asset bundle definition for timeseries_ingestion_governance.
+# See https://docs.databricks.com/dev-tools/bundles/index.html for documentation.
+bundle:
+  name: timeseries_ingestion_governance
+  uuid: 0035660d-e106-4f1f-9106-efe697871b42
+
+include:
+  - resources/*.yml
+  - resources/*/*.yml
+
+variables:
+  catalog_name:
+    default: main
+
+  raw_schema:
+    default: iot_raw
+
+  bronze_schema:
+    default: iot_bronze
+
+  silver_schema:
+    default: iot_silver
+
+  gold_schema:
+    default: iot_gold
+
+  # External Location: raw_files
+  landing_base:
+    default: abfss://unitymetastore@timeseriesdataaub001.dfs.core.windows.net/iot
+
+  # Use metastore_root_location for Auto Loader schema/checkpoints
+  autoloader_state_base:
+    default: abfss://unitymetastore@timeseriesdataaub001.dfs.core.windows.net/unitycatalog/pipeline_state/intelliam_timeseries_v2
+
+targets:
+  dev:
+    # The default target uses 'mode: development' to create a development copy.
+    # - Deployed resources get prefixed with '[dev my_user_name]'
+    # - Any job schedules and triggers are paused by default.
+    # See also https://docs.databricks.com/dev-tools/bundles/deployment-modes.html.
+    mode: development
+    default: true
+    workspace:
+      host: https://adb-7405607924725170.10.azuredatabricks.net
+
+  prod:
+    mode: production
+    workspace:
+      host: https://adb-7405607924725170.10.azuredatabricks.net
+      # We explicitly deploy to /Workspace/Users/austineuba@austineubgmail.onmicrosoft.com to make sure we only have a single copy.
+      root_path: /Workspace/Users/austineuba@austineubgmail.onmicrosoft.com/.bundle/${bundle.name}/${bundle.target}
+    permissions:
+      - user_name: austineuba@austineubgmail.onmicrosoft.com
+        level: CAN_MANAGE

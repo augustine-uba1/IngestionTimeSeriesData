@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "applied_schema": "configs/sources/schemas/reading_schema.json",
+  "name": "vibration_components",
+  "description": "Installed vibration sensor components mapped to Bottle_Filler heads.",
+  "source_system": "intelliam_iot",
+  "domain": "iot",
+  "file_format": "csv",
+  "landing_path": "abfss://<container>@<sa>.dfs.core.windows.net/iot/landing/vibration_components/*.csv",
+  "raw_table": "iot.raw.vibration_components_raw",
+  "bronze_table": "iot.bronze.vibration_components",
+  "primary_key": ["UID"],
+  "csv_options": {
+    "header": true,
+    "delimiter": ",",
+    "encoding": "utf-8",
+    "multiLine": false
+  },
+  "parsing": {
+    "installation_date_format": "dd/MM/yyyy"
+  },
+  "schema_evolution": {
+    "autoloader_schema_evolution_mode": "addNewColumns",
+    "rescued_data_column": "_rescued_data",
+    "on_unexpected_columns": "capture"
+  },
+  "governance": {
+    "table_tags": {
+      "layer": "raw/bronze",
+      "entity": "component",
+      "measurement": "vibration",
+      "contains_pii": "no",
+      "sensitivity": "internal",
+      "retention": "365d"
+    }
+  },
+  "columns": [
+    { "name": "UID", "type": "string", "nullable": false, "tags": { "classification": "metadata", "role": "record_id" } },
+    { "name": "Path", "type": "string", "nullable": false, "tags": { "classification": "metadata", "role": "uns_path" } },
+    { "name": "installation_date", "type": "date", "source_type": "string", "nullable": false, "parse": { "from_format": "dd/MM/yyyy" }, "tags": { "classification": "metadata" } },
+    { "name": "sensor_id", "type": "string", "nullable": false, "tags": { "classification": "metadata", "role": "sensor_id" } },
+    { "name": "name", "type": "string", "nullable": false, "tags": { "classification": "metadata", "role": "component_name" } }
+  ]
+}

@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "applied_schema": "configs/sources/schemas/reading_schema.json",
+  "name": "power_components",
+  "description": "Installed power sensor components mapped to Bottle_Filler heads.",
+  "source_system": "intelliam_iot",
+  "domain": "iot",
+  "file_format": "csv",
+  "landing_path": "abfss://<container>@<sa>.dfs.core.windows.net/iot/landing/power_components/*.csv",
+  "raw_table": "iot.raw.power_components_raw",
+  "bronze_table": "iot.bronze.power_components",
+  "primary_key": ["UID"],
+  "csv_options": {
+    "header": true,
+    "delimiter": ",",
+    "encoding": "utf-8",
+    "multiLine": false
+  },
+  "parsing": {
+    "installation_date_format": "dd/MM/yyyy"
+  },
+  "schema_evolution": {
+    "autoloader_schema_evolution_mode": "addNewColumns",
+    "rescued_data_column": "_rescued_data",
+    "on_unexpected_columns": "capture"
+  },
+  "governance": {
+    "table_tags": {
+      "layer": "raw/bronze",
+      "entity": "component",
+      "measurement": "power",
+      "contains_pii": "no",
+      "sensitivity": "internal",
+      "retention": "365d"
+    }
+  },
+  "columns": [
+    {
+      "name": "UID",
+      "type": "string",
+      "nullable": false,
+      "tags": { "classification": "metadata", "role": "record_id" },
+      "quality": [
+        { "rule": "regex", "expr": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" }
+      ]
+    },
+    {
+      "name": "Path",
+      "type": "string",
+      "nullable": false,
+      "tags": { "classification": "metadata", "role": "uns_path" },
+      "quality": [
+        { "rule": "contains", "expr": "Bottle_Filler" }
+      ]
+    },
+    {
+      "name": "installation_date",
+      "type": "date",
+      "source_type": "string",
+      "nullable": false,
+      "parse": { "from_format": "dd/MM/yyyy" },
+      "tags": { "classification": "metadata", "role": "installation_date" }
+    },
+    {
+      "name": "sensor_id",
+      "type": "string",
+      "nullable": false,
+      "tags": { "classification": "metadata", "role": "sensor_id" }
+    },
+    {
+      "name": "name",
+      "type": "string",
+      "nullable": false,
+      "tags": { "classification": "metadata", "role": "component_name" }
+    }
+  ],
+  "derived_columns": [
+    { "name": "uns_enterprise", "type": "string", "expression": "split(Path, '/')[0]", "tags": { "classification": "derived", "uns_level": "enterprise" } },
+    { "name": "uns_site", "type": "string", "expression": "split(Path, '/')[1]", "tags": { "classification": "derived", "uns_level": "site" } },
+    { "name": "uns_area", "type": "string", "expression": "split(Path, '/')[2]", "tags": { "classification": "derived", "uns_level": "area" } },
+    { "name": "uns_machine", "type": "string", "expression": "split(Path, '/')[3]", "tags": { "classification": "derived", "uns_level": "machine" } },
+    { "name": "uns_component", "type": "string", "expression": "split(Path, '/')[4]", "tags": { "classification": "derived", "uns_level": "component" } }
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "applied_schema": "configs/sources/schemas/reading_schema.json",
+  "name": "power_readings",
+  "description": "Power status (ON/OFF) events for installed sensors.",
+  "source_system": "intelliam_iot",
+  "domain": "iot",
+  "file_format": "csv",
+  "landing_path": "abfss://<container>@<sa>.dfs.core.windows.net/iot/landing/power_readings/*.csv",
+  "raw_table": "iot.raw.power_readings_raw",
+  "bronze_table": "iot.bronze.power_readings",
+  "primary_key": ["UID"],
+  "natural_key": ["sensor_id", "timestamp"],
+  "csv_options": {
+    "header": true,
+    "delimiter": ",",
+    "encoding": "utf-8",
+    "multiLine": false
+  },
+  "parsing": {
+    "timestamp_format": "dd/MM/yyyy HH:mm",
+    "timezone": "UTC"
+  },
+  "schema_evolution": {
+    "autoloader_schema_evolution_mode": "addNewColumns",
+    "rescued_data_column": "_rescued_data",
+    "on_unexpected_columns": "capture"
+  },
+  "freshness": {
+    "max_ingest_lag_minutes": 1440,
+    "timestamp_column": "_ingest_ts"
+  },
+  "governance": {
+    "table_tags": {
+      "layer": "raw/bronze",
+      "entity": "reading",
+      "measurement": "power",
+      "contains_pii": "no",
+      "sensitivity": "internal",
+      "retention": "365d"
+    }
+  },
+  "columns": [
+    {
+      "name": "UID",
+      "type": "string",
+      "nullable": false,
+      "tags": { "classification": "metadata", "role": "record_id" },
+      "quality": [
+        { "rule": "regex", "expr": "^[0-9a-fA-F-]{36}$" }
+      ]
+    },
+    {
+      "name": "sensor_id",
+      "type": "string",
+      "nullable": false,
+      "tags": { "classification": "metadata", "role": "sensor_id" }
+    },
+    {
+      "name": "timestamp",
+      "type": "timestamp",
+      "source_type": "string",
+      "nullable": false,
+      "parse": { "from_format": "dd/MM/yyyy HH:mm" },
+      "tags": { "classification": "telemetry", "role": "event_time" }
+    },
+    {
+      "name": "status",
+      "type": "string",
+      "nullable": false,
+      "tags": { "classification": "telemetry", "role": "power_state" },
+      "quality": [
+        { "rule": "in", "expr": ["ON", "OFF"] }
+      ]
+    }
+  ]
+}
