@@ -8,19 +8,33 @@ RAW_SCHEMA = spark.conf.get("iot.raw_schema")
 DATE_FMT = "dd/MM/yyyy"
 TS_FMT = "dd/MM/yyyy HH:mm"
 
-
 def read_raw_stream(table_name: str):
     """Read a raw Delta table as a stream for DLT."""
     return spark.readStream.table(f"{CATALOG}.{RAW_SCHEMA}.{table_name}")
 
-
 def parse_common_component_cols(df):
-    return df.withColumn("installation_date", F.to_date(F.col("installation_date"), DATE_FMT))
-
+    # Keep if already DATE; otherwise try dd/MM/yyyy then ISO yyyy-MM-dd
+    return df.withColumn(
+        "installation_date",
+        F.coalesce(
+            F.col("installation_date").cast("date"),
+            F.to_date(F.col("installation_date"), DATE_FMT),
+            F.to_date(F.col("installation_date"), "yyyy-MM-dd")
+        )
+    )
 
 def parse_common_reading_cols(df):
-    return df.withColumn("timestamp", F.to_timestamp(F.col("timestamp"), TS_FMT))
-
+    # Keep if already TIMESTAMP; otherwise try dd/MM then ISO formats
+    ts = F.col("timestamp")
+    return df.withColumn(
+        "timestamp",
+        F.coalesce(
+            ts.cast("timestamp"),
+            F.to_timestamp(ts, TS_FMT),
+            F.to_timestamp(ts, "yyyy-MM-dd HH:mm:ss"),
+            F.to_timestamp(ts, "yyyy-MM-dd HH:mm")
+        )
+    )
 
 def add_uns_from_path(df):
     """
@@ -36,40 +50,29 @@ def add_uns_from_path(df):
         .withColumn("uns_component",  F.split(F.col("Path"), "/").getItem(4))
     )
 
-
 def with_quality_flags(df, checks):
     """
     checks: list of tuples -> (flag_col_name, boolean_expr, failure_message)
-
     Adds:
-      - each flag col (_q_*)
-      - _is_valid (boolean, never null)
-      - _quarantine_reason (array<string>, never null; empty array if valid)
+      - each flag col
+      - _is_valid
+      - _quarantine_reason (array of failure messages)
     """
-
-    # 1) Add each flag; coalesce NULL booleans to False (null-safe)
     for flag_name, expr, _msg in checks:
-        df = df.withColumn(flag_name, F.coalesce(expr, F.lit(False)))
+        df = df.withColumn(flag_name, expr)
 
-    # 2) Add _is_valid is across all flags; start from True (null-safe)
-    is_valid_expr = F.lit(True)
+    is_valid_expr = None
     for flag_name, _expr, _msg in checks:
-        is_valid_expr = is_valid_expr & F.col(flag_name)
-
+        is_valid_expr = F.col(flag_name) if is_valid_expr is None else (is_valid_expr & F.col(flag_name))
     df = df.withColumn("_is_valid", is_valid_expr)
 
-    # 3) Build reasons array (msg only when flag is False), then remove nulls reliably
-    reasons = F.array(*[
-        F.when(F.col(flag_name) == F.lit(False), F.lit(msg)).otherwise(F.lit(None))
+    reason_array = F.array(*[
+        F.when(~F.col(flag_name), F.lit(msg)).otherwise(F.lit(None))
         for flag_name, _expr, msg in checks
     ])
-
-    df = df.withColumn("_reasons_tmp", reasons)
-    df = df.withColumn("_quarantine_reason", F.expr("filter(_reasons_tmp, x -> x is not null)"))
-    df = df.drop("_reasons_tmp")
+    df = df.withColumn("_quarantine_reason", F.array_remove(reason_array, F.lit(None)))
 
     return df
-
 
 # ============================================================
 # COMPONENTS (Bronze)
@@ -151,21 +154,15 @@ def vibration_components():
 # READINGS (Bronze + Quarantine)
 # ============================================================
 
-# ---------- POWER READINGS ----------
-
-def power_checks(_df):
+def power_checks(df):
     return [
-        ("_q_uid_ok",    F.col("UID").isNotNull(),           "UID is null"),
-        ("_q_sid_ok",    F.col("sensor_id").isNotNull(),     "sensor_id is null"),
-        ("_q_ts_ok",     F.col("timestamp").isNotNull(),     "timestamp parse failed"),
-        ("_q_status_ok", F.col("status").isin("ON", "OFF"),  "status not in ON/OFF"),
+        ("_q_uid_ok",    F.col("UID").isNotNull(),                          "UID is null"),
+        ("_q_sid_ok",    F.col("sensor_id").isNotNull(),                    "sensor_id is null"),
+        ("_q_ts_ok",     F.col("timestamp").isNotNull(),                    "timestamp parse failed"),
+        ("_q_status_ok", F.col("status").isin("ON", "OFF"),                 "status not in ON/OFF"),
     ]
 
-
-@dlt.table(
-    name="power_readings",
-    comment="Bronze: power readings (ON/OFF) with parsed timestamp. Invalid rows go to power_readings_quarantine."
-)
+@dlt.table(name="power_readings", comment="Bronze: power readings (ON/OFF) with parsed timestamp. Invalid rows go to power_readings_quarantine.")
 @dlt.expect_all({
     "uid_not_null": "UID IS NOT NULL",
     "sensor_id_not_null": "sensor_id IS NOT NULL",
@@ -178,11 +175,7 @@ def power_readings():
     df = with_quality_flags(df, power_checks(df))
     return df.filter(F.col("_is_valid")).drop("_is_valid")
 
-
-@dlt.table(
-    name="power_readings_quarantine",
-    comment="Quarantine: invalid power readings with reasons."
-)
+@dlt.table(name="power_readings_quarantine", comment="Quarantine: invalid power readings with reasons.")
 def power_readings_quarantine():
     df = read_raw_stream("power_readings_raw")
     df = parse_common_reading_cols(df)
@@ -190,23 +183,17 @@ def power_readings_quarantine():
     return df.filter(~F.col("_is_valid")).drop("_is_valid")
 
 
-# ---------- SPEED READINGS ----------
-
-def speed_checks(_df):
-    hz = F.col("hertz").cast("double")
+def speed_checks(df):
     return [
-        ("_q_uid_ok",  F.col("UID").isNotNull(),                        "UID is null"),
-        ("_q_sid_ok",  F.col("sensor_id").isNotNull(),                  "sensor_id is null"),
-        ("_q_ts_ok",   F.col("timestamp").isNotNull(),                  "timestamp parse failed"),
-        ("_q_hz_ok",   hz.isNotNull(),                                  "hertz not numeric"),
-        ("_q_hz_rng",  (hz >= F.lit(0.0)) & (hz <= F.lit(500.0)),       "hertz out of range (0-500)"),
+        ("_q_uid_ok",   F.col("UID").isNotNull(),                       "UID is null"),
+        ("_q_sid_ok",   F.col("sensor_id").isNotNull(),                 "sensor_id is null"),
+        ("_q_ts_ok",    F.col("timestamp").isNotNull(),                 "timestamp parse failed"),
+        ("_q_hz_ok",    F.col("hertz").cast("double").isNotNull(),       "hertz not numeric"),
+        ("_q_hz_rng",   (F.col("hertz").cast("double") >= F.lit(0.0)) &
+                        (F.col("hertz").cast("double") <= F.lit(500.0)), "hertz out of range (0-500)"),
     ]
 
-
-@dlt.table(
-    name="speed_readings",
-    comment="Bronze: speed readings (Hz) with parsed timestamp. Invalid rows go to speed_readings_quarantine."
-)
+@dlt.table(name="speed_readings", comment="Bronze: speed readings (Hz) with parsed timestamp. Invalid rows go to speed_readings_quarantine.")
 @dlt.expect_all({
     "uid_not_null": "UID IS NOT NULL",
     "sensor_id_not_null": "sensor_id IS NOT NULL",
@@ -220,11 +207,7 @@ def speed_readings():
     df = with_quality_flags(df, speed_checks(df))
     return df.filter(F.col("_is_valid")).drop("_is_valid")
 
-
-@dlt.table(
-    name="speed_readings_quarantine",
-    comment="Quarantine: invalid speed readings with reasons."
-)
+@dlt.table(name="speed_readings_quarantine", comment="Quarantine: invalid speed readings with reasons.")
 def speed_readings_quarantine():
     df = read_raw_stream("speed_readings_raw")
     df = parse_common_reading_cols(df).withColumn("hertz", F.col("hertz").cast("double"))
@@ -232,24 +215,18 @@ def speed_readings_quarantine():
     return df.filter(~F.col("_is_valid")).drop("_is_valid")
 
 
-# ---------- TEMP READINGS ----------
-
-def temp_checks(_df):
-    deg = F.col("degrees").cast("double")
+def temp_checks(df):
     return [
-        ("_q_uid_ok",   F.col("UID").isNotNull(),                          "UID is null"),
-        ("_q_sid_ok",   F.col("sensor_id").isNotNull(),                    "sensor_id is null"),
-        ("_q_ts_ok",    F.col("timestamp").isNotNull(),                    "timestamp parse failed"),
-        ("_q_deg_ok",   deg.isNotNull(),                                   "degrees not numeric"),
-        ("_q_unit_ok",  F.col("unit").isin("C", "F"),                      "unit not in C/F"),
-        ("_q_deg_rng",  (deg >= F.lit(-50.0)) & (deg <= F.lit(300.0)),     "degrees out of range (-50..300)"),
+        ("_q_uid_ok",    F.col("UID").isNotNull(),                          "UID is null"),
+        ("_q_sid_ok",    F.col("sensor_id").isNotNull(),                    "sensor_id is null"),
+        ("_q_ts_ok",     F.col("timestamp").isNotNull(),                    "timestamp parse failed"),
+        ("_q_deg_ok",    F.col("degrees").cast("double").isNotNull(),       "degrees not numeric"),
+        ("_q_unit_ok",   F.col("unit").isin("C", "F"),                      "unit not in C/F"),
+        ("_q_deg_rng",   (F.col("degrees").cast("double") >= F.lit(-50.0)) &
+                         (F.col("degrees").cast("double") <= F.lit(300.0)), "degrees out of range (-50..300)"),
     ]
 
-
-@dlt.table(
-    name="temp_readings",
-    comment="Bronze: temperature readings with parsed timestamp and standardized degrees_c. Invalid rows go to temp_readings_quarantine."
-)
+@dlt.table(name="temp_readings", comment="Bronze: temperature readings with parsed timestamp and standardized degrees_c. Invalid rows go to temp_readings_quarantine.")
 @dlt.expect_all({
     "uid_not_null": "UID IS NOT NULL",
     "sensor_id_not_null": "sensor_id IS NOT NULL",
@@ -260,61 +237,43 @@ def temp_checks(_df):
 def temp_readings():
     df = read_raw_stream("temp_readings_raw")
     df = parse_common_reading_cols(df).withColumn("degrees", F.col("degrees").cast("double"))
-
     df = df.withColumn(
         "degrees_c",
         F.when(F.col("unit") == F.lit("C"), F.col("degrees"))
          .when(F.col("unit") == F.lit("F"), (F.col("degrees") - F.lit(32.0)) * F.lit(5.0) / F.lit(9.0))
          .otherwise(F.lit(None))
     )
-
     df = with_quality_flags(df, temp_checks(df))
     return df.filter(F.col("_is_valid")).drop("_is_valid")
 
-
-@dlt.table(
-    name="temp_readings_quarantine",
-    comment="Quarantine: invalid temperature readings with reasons."
-)
+@dlt.table(name="temp_readings_quarantine", comment="Quarantine: invalid temperature readings with reasons.")
 def temp_readings_quarantine():
     df = read_raw_stream("temp_readings_raw")
     df = parse_common_reading_cols(df).withColumn("degrees", F.col("degrees").cast("double"))
-
     df = df.withColumn(
         "degrees_c",
         F.when(F.col("unit") == F.lit("C"), F.col("degrees"))
          .when(F.col("unit") == F.lit("F"), (F.col("degrees") - F.lit(32.0)) * F.lit(5.0) / F.lit(9.0))
          .otherwise(F.lit(None))
     )
-
     df = with_quality_flags(df, temp_checks(df))
     return df.filter(~F.col("_is_valid")).drop("_is_valid")
 
 
-# ---------- VIBRATION READINGS ----------
-
-def vibration_checks(_df):
-    acc = F.col("acceleration").cast("double")
-    vel = F.col("velocity").cast("double")
-    p2p = F.col("peak_to_peak").cast("double")
-
+def vibration_checks(df):
     return [
-        ("_q_uid_ok",  F.col("UID").isNotNull(),                              "UID is null"),
-        ("_q_sid_ok",  F.col("sensor_id").isNotNull(),                        "sensor_id is null"),
-        ("_q_ts_ok",   F.col("timestamp").isNotNull(),                        "timestamp parse failed"),
-        ("_q_acc_ok",  acc.isNotNull(),                                       "acceleration not numeric"),
-        ("_q_vel_ok",  vel.isNotNull(),                                       "velocity not numeric"),
-        ("_q_p2p_ok",  p2p.isNotNull(),                                       "peak_to_peak not numeric"),
-        ("_q_acc_rng", (acc >= 0.0) & (acc <= 100.0),                         "acceleration out of range (0-100)"),
-        ("_q_vel_rng", (vel >= 0.0) & (vel <= 100.0),                         "velocity out of range (0-100)"),
-        ("_q_p2p_rng", (p2p >= 0.0) & (p2p <= 1000.0),                        "peak_to_peak out of range (0-1000)"),
+        ("_q_uid_ok",   F.col("UID").isNotNull(),                             "UID is null"),
+        ("_q_sid_ok",   F.col("sensor_id").isNotNull(),                       "sensor_id is null"),
+        ("_q_ts_ok",    F.col("timestamp").isNotNull(),                       "timestamp parse failed"),
+        ("_q_acc_ok",   F.col("acceleration").cast("double").isNotNull(),      "acceleration not numeric"),
+        ("_q_vel_ok",   F.col("velocity").cast("double").isNotNull(),          "velocity not numeric"),
+        ("_q_p2p_ok",   F.col("peak_to_peak").cast("double").isNotNull(),      "peak_to_peak not numeric"),
+        ("_q_acc_rng",  (F.col("acceleration") >= F.lit(0.0)) & (F.col("acceleration") <= F.lit(100.0)), "acceleration out of range (0-100)"),
+        ("_q_vel_rng",  (F.col("velocity") >= F.lit(0.0)) & (F.col("velocity") <= F.lit(100.0)),         "velocity out of range (0-100)"),
+        ("_q_p2p_rng",  (F.col("peak_to_peak") >= F.lit(0.0)) & (F.col("peak_to_peak") <= F.lit(1000.0)), "peak_to_peak out of range (0-1000)"),
     ]
 
-
-@dlt.table(
-    name="vibration_readings",
-    comment="Bronze: vibration readings with parsed timestamp. Invalid rows go to vibration_readings_quarantine."
-)
+@dlt.table(name="vibration_readings", comment="Bronze: vibration readings with parsed timestamp. Invalid rows go to vibration_readings_quarantine.")
 @dlt.expect_all({
     "uid_not_null": "UID IS NOT NULL",
     "sensor_id_not_null": "sensor_id IS NOT NULL",
@@ -331,15 +290,10 @@ def vibration_readings():
           .withColumn("velocity", F.col("velocity").cast("double"))
           .withColumn("peak_to_peak", F.col("peak_to_peak").cast("double"))
     )
-
     df = with_quality_flags(df, vibration_checks(df))
     return df.filter(F.col("_is_valid")).drop("_is_valid")
 
-
-@dlt.table(
-    name="vibration_readings_quarantine",
-    comment="Quarantine: invalid vibration readings with reasons."
-)
+@dlt.table(name="vibration_readings_quarantine", comment="Quarantine: invalid vibration readings with reasons.")
 def vibration_readings_quarantine():
     df = read_raw_stream("vibration_readings_raw")
     df = parse_common_reading_cols(df)
@@ -348,6 +302,5 @@ def vibration_readings_quarantine():
           .withColumn("velocity", F.col("velocity").cast("double"))
           .withColumn("peak_to_peak", F.col("peak_to_peak").cast("double"))
     )
-
     df = with_quality_flags(df, vibration_checks(df))
     return df.filter(~F.col("_is_valid")).drop("_is_valid")

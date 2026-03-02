@@ -1,0 +1,21 @@
+resources:
+  pipelines:
+    silver_pipeline:
+      name: intelliam-silver-${bundle.target}
+      serverless: true
+      edition: ADVANCED
+      development: true
+      continuous: false
+      channel: CURRENT
+      photon: true
+
+      catalog: ${var.catalog_name}
+      target: iot_silver
+
+      libraries:
+        - file:
+            path: ../src/pipelines/silver_pipeline.py
+
+      configuration:
+        iot.catalog: ${var.catalog_name}
+        iot.bronze_schema: ${var.bronze_schema}
