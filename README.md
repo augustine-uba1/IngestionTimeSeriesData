@@ -235,7 +235,7 @@ Gold is built using a dedicated DLT/Lakeflow pipeline.
 
    In the initial implementation, a conservative threshold was used (commonly z > 3σ) to minimise false positives. On the provided dataset/time window, this resulted in no anomalies detected, which is a valid outcome (i.e., the data appears stable under that strict definition).
 
-   For the purpose of this interview practical, I also tested less conservative thresholds to demonstrate the end-to-end workflow and business outputs:
+   For the purpose of this practical, I also tested less conservative thresholds to demonstrate the end-to-end workflow and business outputs:
 
    * At z > 2σ, the anomaly table still returned 0 rows for this dataset.
    * I then reduced the vibration threshold to z > 1σ (while keeping temperature at the stricter threshold) to increase sensitivity and validate the downstream pipeline behaviour.
@@ -339,6 +339,24 @@ Using the Gold analytics layer (`iot_gold.component_health_1m` and `iot_gold.com
 I computed Pearson correlation coefficients across speed, temperature, and vibration signals as part of the Gold analysis. Pearson’s product-moment correlation measures the strength and direction of a linear relationship between two variables, ranging from −1 (perfect negative linear correlation) through 0 (no linear correlation) to +1 (perfect positive linear correlation). Correlations are computed over paired observations where both variables are present (non-null).
 
 This definition is described authoritatively by NIST’s Handbook of Statistical Methods (Pearson’s product-moment correlation).
+
+## Technical Recommendation: Introduce dbt for Silver + Gold (future enhancement)
+
+While the current Silver/Gold implementation in this repo is solid for a demo — it’s clear, reproducible, and demonstrates Lakehouse thinking — Silver and Gold would benefit significantly from being implemented in dbt (dbt Core or dbt Cloud) in a full delivery.
+
+**Why dbt fits Silver + Gold particularly well**
+
+* **Better organisation of transformations:** Silver and Gold are primarily modeling + transformations work. dbt encourages clean separation into `models/silver/*` and `models/gold/*` with consistent naming and structure (much easier to navigate than large notebook/pipeline files).
+* **First-class testing:** dbt ships with strong “production” tests out of the box (`not_null`, `unique`, `accepted_values`, `relationships`) which map naturally to dimensional modelling and quality rules in Silver/Gold.
+* **Documentation + lineage:** dbt can auto-generate a documentation site and lineage graph (DAG) that is easy for engineers, analysts, and reviewers to understand—very useful for handover and impact analysis.
+* **Incremental models + performance patterns:** for large time-series facts, dbt supports incremental builds (MERGE/insert strategies) which is a natural fit for evolving Gold datasets and derived aggregates.
+* **Clear “contract” for business tables:** dbt makes it straightforward to document columns, enforce conventions, and expose only stable curated models to downstream consumers.
+
+**Recommended hybrid approach (best of both worlds)**
+
+Keep Auto Loader + DLT for Raw/Bronze where streaming ingestion, quarantine, and expectation monitoring are most valuable.
+
+Use dbt for Silver/Gold where transformations are mostly SQL and benefit from dbt’s testing, documentation, and modular modelling. Databricks is a supported platform via the `dbt-databricks` adapter.
 
 **References:**
 
