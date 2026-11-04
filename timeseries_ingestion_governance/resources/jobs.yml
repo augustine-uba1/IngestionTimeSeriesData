@@ -52,7 +52,7 @@ resources:
 
         - task_key: apply_uc_tags
           depends_on:
-            - task_key: run_gold_pipeline
+            - task_key: run_bronze_pipeline
           notebook_task:
             notebook_path: ../src/notebooks/90_apply_uc_tags.ipynb
             base_parameters:

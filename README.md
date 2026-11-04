@@ -59,7 +59,7 @@ This development issue is included as evidence of how the quarantine mechanism b
 
 ## Governance strategy
 
-Governance is handled through Unity Catalog integration and metadata declared in the JSON configs.  A dedicated job task applies table/column tags after Bronze materialisation, ensuring classification, sensitivity, domain and measurement type are consistent across layers.  Access control is managed via external locations and catalog permissions (see References below).
+Governance is handled through Unity Catalog integration and metadata declared in the JSON configs. After Bronze materialisation, a dedicated job task applies a `data_classification` tag to every column in the Bronze schema, including generated and evolved columns. The current sensor sources declare `contains_pii: no`, so columns default to `Public Data`; set `tags.data_classification` to `Personal Data` or `Public Data` on a configured column to override that default. The task runs immediately after Bronze, independently of downstream Silver and Gold processing. Access control is managed via external locations and catalog permissions (see References below).
 
 ## Schema evolution or sensor hardware changes
 
